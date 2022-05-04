@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Email Security Check Networking Stack
+Transform:
+  - AWS::Serverless-2016-10-31
+Resources:
+  GetMXHosts:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetMxHosts
+      Handler: index.handler
+      CodeUri: ./getMXHosts/
+      Runtime: nodejs14.x
+      Description: Gets a list of mx hosts for domain
+  TestIP:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CheckTlsForIP
+      Handler: index.handler
+      CodeUri: ./checkTlsForIP/
+      Runtime: nodejs14.x
+      Description: Check TLS for a given IP
+  SaveState:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: SaveTLSState
+      Handler: index.handler
+      CodeUri: ./saveTLSState/
+      Runtime: nodejs14.x
+      Description: combine IP results for a host
+  StatesExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: StatesExecutionRole30222
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - states.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - "lambda:InvokeFunction"
+                  - "cloudwatch:*"
+                  - "logs:*"
+                Resource: "*"
+  StepFunction:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        StartAt: GetMxHostList
+        States:
+          GetMxHostList:
+            Type: Task
+            Resource: !GetAtt GetMXHosts.Arn
+            Next: LoopHosts
+          LoopHosts:
+            Type: Map
+            Next: SaveState
+            ItemsPath: '$.hosts'
+            ResultPath: '$.results'
+            Iterator:
+              StartAt: LoopIps
+              States:
+                LoopIps:
+                  Type: Map
+                  End: true
+                  ItemsPath: '$.ips'
+                  ResultPath: '$.results'
+                  Parameters:
+                    ip.$: '$$.Map.Item.Value'
+                  Iterator:
+                    StartAt: CheckIp
+                    States:
+                      CheckIp:
+                        Type: Task
+                        Resource: !GetAtt TestIP.Arn
+                        Next: Wait
+                      Wait:
+                        Type: Wait
+                        Seconds: 1
+                        End: true
+          SaveState:
+            Type: Task
+            Resource: !GetAtt SaveState.Arn
+            End: true
+      Role: !GetAtt StatesExecutionRole.Arn
